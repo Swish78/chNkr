@@ -7,6 +7,7 @@
 - **Flexible Chunking Styles**: Choose from fixed-token, semantic-aware, or custom chunking methods.
 - **Overlap Support**: Ensure context continuity between chunks with adjustable overlap settings.
 - **Vector Store Integration**: Direct support for Chroma, Pinecone, and Neo4j.
+- **Custom Models**: Support for user-provided semantic models for advanced chunking customization.
 - **Blazing Fast Performance**: Built using Cython/C++ for maximum speed.
 - **Ease of Use**: Python-friendly API with detailed documentation and examples.
 
@@ -142,7 +143,7 @@ pytest tests/
 ## Roadmap
 
 - Add support for more vector stores (e.g., Weaviate, Redis).
-- Implement advanced chunking styles (e.g., topic-based chunking).
+- Implement advanced chunking styles (e.g., topic-based chunking, language-aware chunking).
 - Extend support for additional languages beyond English.
 - Add CLI support for quick operations from the terminal.
 
