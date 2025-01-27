@@ -21,6 +21,7 @@ docutils==0.21.2
 durationpy==0.9
 exceptiongroup==1.2.2
 faiss-cpu==1.9.0.post1
+faiss-cpu>=1.7.4  # Use faiss-gpu for GPU support
 fastapi==0.115.6
 filelock==3.16.1
 flatbuffers==24.12.23
@@ -86,6 +87,7 @@ pytest-cov==6.0.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 PyYAML==6.0.2
+pymilvus>=2.3.3
 requests==2.32.3
 requests-oauthlib==2.0.0
 rich==13.9.4
