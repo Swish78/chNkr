@@ -17,8 +17,9 @@ cdef class Chunker:
     cdef object tokenizer
     cdef object model
     cdef float similarity_threshold
+    cdef str topic_method
 
-    def __init__(self, style="fixed", max_tokens=100,topic_method='lda', overlap=0, embedding_dim=768, model_name="bert-base-uncased", similarity_threshold=0.8):
+    def __init__(self, style="fixed", max_tokens=100, topic_method='lda', overlap=0, embedding_dim=768, model_name="bert-base-uncased", similarity_threshold=0.8):
         """
         Initialize the Chunker with a specified chunking style, tokenizer/embedding model, and similarity threshold.
         """
@@ -50,98 +51,168 @@ cdef class Chunker:
 
     cdef list _semantic_chunk(self, str text):
         """
-        Semantic chunking using cosine similarity between sentence embeddings.
+        Semantic chunking based on sentence embeddings and similarity.
+        Groups similar sentences together while respecting max_tokens.
         """
-        sentences = text.split('.')
-        sentences = [s.strip() for s in sentences if s.strip()]  # Remove empty strings and extra spaces
+        sentences = text.split('. ')
+        if not sentences:
+            return []
+            
+        # Get embeddings for all sentences
         embeddings = self.model.encode(sentences)
-        cosine_sim = cosine_similarity(embeddings)
+        
         chunks = []
-        visited = [False] * len(sentences)
-
-        for i in range(len(sentences)):
-            if visited[i]:
-                continue  # Skip already visited sentences
-            current_chunk = [sentences[i]]
-            visited[i] = True
-            for j in range(i + 1, len(sentences)):
-                if not visited[j] and cosine_sim[i][j] >= self.similarity_threshold:
-                    current_chunk.append(sentences[j])
-                    visited[j] = True
-
-            chunks.append(" ".join(current_chunk))
-
-        return chunks
-
-    cdef list _fixed_chunk(self, str text):
-        """
-        Fixed-token chunking.
-        """
-        tokens = self.tokenizer.tokenize(text)
-        chunks = []
-        for i in range(0, len(tokens), self.max_tokens):
-            chunk = self.tokenizer.convert_tokens_to_string(tokens[i:i + self.max_tokens])
-            chunks.append(chunk)
-        return chunks
-
-    cdef list _window_chunk(self, str text):
-        """
-        Sliding window chunking with overlapping tokens.
-        """
-        tokens = self.tokenizer.tokenize(text)
-        chunks = []
-        start = 0
-        while start < len(tokens):
-            end = min(start + self.max_tokens, len(tokens))
-            chunk = self.tokenizer.convert_tokens_to_string(tokens[start:end])
-            chunks.append(chunk)
-            start = start + self.max_tokens - self.overlap  # Advance by max_tokens - overlap
+        current_chunk = []
+        current_tokens = 0
+        
+        for i, sentence in enumerate(sentences):
+            tokens = len(self.tokenizer.encode(sentence))
+            
+            if not current_chunk:
+                current_chunk.append(sentence)
+                current_tokens = tokens
+                continue
+                
+            # Calculate similarity with current chunk
+            chunk_embedding = np.mean([embeddings[j] for j, s in enumerate(sentences) if s in current_chunk], axis=0)
+            similarity = cosine_similarity([chunk_embedding], [embeddings[i]])[0][0]
+            
+            if similarity >= self.similarity_threshold and current_tokens + tokens <= self.max_tokens:
+                current_chunk.append(sentence)
+                current_tokens += tokens
+            else:
+                chunks.append('. '.join(current_chunk) + '.')
+                current_chunk = [sentence]
+                current_tokens = tokens
+        
+        if current_chunk:
+            chunks.append('. '.join(current_chunk) + '.')
+            
         return chunks
 
     cdef list _topic_chunk(self, str text):
         """
-        Topic-based chunking using LDA or clustering.
+        Topic-based chunking using LDA or KMeans clustering.
         """
         sentences = text.split('. ')
+        if not sentences:
+            return []
+            
+        # Get embeddings
         embeddings = self.model.encode(sentences)
-
-        if self.topic_method == "lda":
-            # Using LDA for topic modeling
-            lda = LDA(n_components=max(1, len(sentences) // self.max_tokens), random_state=42)
-            topics = lda.fit_transform(embeddings)
-            topic_indices = np.argmax(topics, axis=1)
-        elif self.topic_method == "kmeans":
-            # Using KMeans clustering
-            n_clusters = max(1, len(sentences) // self.max_tokens)
-            kmeans = KMeans(n_clusters=n_clusters)
-            topic_indices = kmeans.fit_predict(embeddings)
+        
+        if self.topic_method == 'lda':
+            # Use LDA for topic modeling
+            lda = LDA(n_components=max(2, len(sentences) // self.max_tokens))
+            sentence_topics = lda.fit_transform(embeddings)
+            dominant_topics = sentence_topics.argmax(axis=1)
         else:
-            raise ValueError("Invalid topic modeling method. Choose 'lda' or 'kmeans'.")
-
-        # Create chunks based on topic clusters
+            # Use KMeans clustering
+            n_clusters = max(2, len(sentences) // self.max_tokens)
+            kmeans = KMeans(n_clusters=n_clusters)
+            dominant_topics = kmeans.fit_predict(embeddings)
+        
+        # Group sentences by topic
+        topic_groups = {}
+        for i, topic in enumerate(dominant_topics):
+            if topic not in topic_groups:
+                topic_groups[topic] = []
+            topic_groups[topic].append(sentences[i])
+        
+        # Create chunks respecting max_tokens
         chunks = []
-        for topic in set(topic_indices):
-            chunk = " ".join([sentences[i] for i in range(len(sentences)) if topic_indices[i] == topic])
-            chunks.append(chunk)
+        for topic_sentences in topic_groups.values():
+            current_chunk = []
+            current_tokens = 0
+            
+            for sentence in topic_sentences:
+                tokens = len(self.tokenizer.encode(sentence))
+                if current_tokens + tokens <= self.max_tokens:
+                    current_chunk.append(sentence)
+                    current_tokens += tokens
+                else:
+                    chunks.append('. '.join(current_chunk) + '.')
+                    current_chunk = [sentence]
+                    current_tokens = tokens
+            
+            if current_chunk:
+                chunks.append('. '.join(current_chunk) + '.')
+        
+        return chunks
+
+    cdef list _window_chunk(self, str text):
+        """
+        Window-based chunking with configurable overlap.
+        """
+        tokens = self.tokenizer.encode(text)
+        if not tokens:
+            return []
+            
+        chunks = []
+        start = 0
+        
+        while start < len(tokens):
+            end = min(start + self.max_tokens, len(tokens))
+            chunk_tokens = tokens[start:end]
+            chunk_text = self.tokenizer.decode(chunk_tokens)
+            chunks.append(chunk_text)
+            
+            # Move window considering overlap
+            start = end - self.overlap if self.overlap > 0 else end
+            
+        return chunks
+
+    cdef list _fixed_chunk(self, str text):
+        """
+        Fixed-size chunking based on token count.
+        """
+        tokens = self.tokenizer.encode(text)
+        if not tokens:
+            return []
+            
+        chunks = []
+        for i in range(0, len(tokens), self.max_tokens):
+            chunk_tokens = tokens[i:i + self.max_tokens]
+            chunk_text = self.tokenizer.decode(chunk_tokens)
+            chunks.append(chunk_text)
+            
         return chunks
 
     cdef list _sentence_chunk(self, str text):
         """
-        Sentence-based chunking with a token limit.
+        Sentence-based chunking with token limit and smart sentence grouping.
         """
         sentences = text.split('. ')
+        if not sentences:
+            return []
+            
         chunks = []
         current_chunk = []
-        current_length = 0
+        current_tokens = 0
+        
         for sentence in sentences:
-            tokenized_sentence = self.tokenizer.tokenize(sentence)
-            if current_length + len(tokenized_sentence) > self.max_tokens:
-                chunks.append(self.tokenizer.convert_tokens_to_string(current_chunk))
-                current_chunk = tokenized_sentence
-                current_length = len(tokenized_sentence)
+            tokens = len(self.tokenizer.encode(sentence))
+            
+            if tokens > self.max_tokens:
+                # Handle very long sentences by using window chunking
+                if current_chunk:
+                    chunks.append('. '.join(current_chunk) + '.')
+                    current_chunk = []
+                    current_tokens = 0
+                
+                window_chunks = self._window_chunk(sentence)
+                chunks.extend(window_chunks)
+                continue
+            
+            if current_tokens + tokens <= self.max_tokens:
+                current_chunk.append(sentence)
+                current_tokens += tokens
             else:
-                current_chunk.extend(tokenized_sentence)
-                current_length += len(tokenized_sentence)
+                chunks.append('. '.join(current_chunk) + '.')
+                current_chunk = [sentence]
+                current_tokens = tokens
+        
         if current_chunk:
-            chunks.append(self.tokenizer.convert_tokens_to_string(current_chunk))
+            chunks.append('. '.join(current_chunk) + '.')
+            
         return chunks
